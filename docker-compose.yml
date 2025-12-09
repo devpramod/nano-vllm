@@ -1,0 +1,71 @@
+version: '3.8'
+
+services:
+  gaudi:
+    build:
+      context: .
+      dockerfile: Dockerfile.gaudi
+    image: nano-vllm-gaudi:latest
+    runtime: habana
+    environment:
+      - PT_HPU_LAZY_MODE=1
+      - PT_HPU_WEIGHT_SHARING=0
+      - HABANA_VISIBLE_MODULES=all
+      - PT_HPU_ENABLE_LAZY_COLLECTIVES=true
+      - OMPI_MCA_btl_vader_single_copy_mechanism=none
+      - HF_HOME=/models
+    volumes:
+      # Mount source code for development
+      - .:/workspace
+      # Mount HuggingFace cache for model weights
+      - ${HF_CACHE_DIR:-~/.cache/huggingface}:/models
+    devices:
+      - /dev/hl0
+      - /dev/hl1
+      - /dev/hl2
+      - /dev/hl3
+      - /dev/hl4
+      - /dev/hl5
+      - /dev/hl6
+      - /dev/hl7
+      - /dev/hl_controlD0
+      - /dev/hl_controlD1
+      - /dev/hl_controlD2
+      - /dev/hl_controlD3
+      - /dev/hl_controlD4
+      - /dev/hl_controlD5
+      - /dev/hl_controlD6
+      - /dev/hl_controlD7
+    cap_add:
+      - SYS_NICE
+    ipc: host
+    network_mode: host
+    working_dir: /workspace
+    stdin_open: true
+    tty: true
+
+  # Development service with only first HPU (for single-device testing)
+  gaudi-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.gaudi
+    image: nano-vllm-gaudi:latest
+    runtime: habana
+    environment:
+      - PT_HPU_LAZY_MODE=1
+      - PT_HPU_WEIGHT_SHARING=0
+      - HABANA_VISIBLE_MODULES=0
+      - HF_HOME=/models
+    volumes:
+      - .:/workspace
+      - ${HF_CACHE_DIR:-~/.cache/huggingface}:/models
+    devices:
+      - /dev/hl0
+      - /dev/hl_controlD0
+    cap_add:
+      - SYS_NICE
+    ipc: host
+    network_mode: host
+    working_dir: /workspace
+    stdin_open: true
+    tty: true

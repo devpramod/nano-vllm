@@ -1,0 +1,31 @@
+# Dockerfile for Intel Gaudi2 (HPU) development
+# Based on Habana's official vLLM plugin image
+
+FROM vault.habana.ai/gaudi-docker/1.22.2/ubuntu24.04/habanalabs/vllm-plugin-2.7.1:latest
+
+# Set environment variables for HPU
+ENV PT_HPU_LAZY_MODE=1
+ENV PT_HPU_WEIGHT_SHARING=0
+ENV HABANA_VISIBLE_MODULES=all
+ENV PT_HPU_ENABLE_LAZY_COLLECTIVES=true
+
+# Set working directory
+WORKDIR /workspace
+
+# Copy project files
+COPY . /workspace/
+
+# Install nano-vllm in editable mode
+# Note: triton and flash-attn are CUDA-specific, skip them on HPU
+RUN pip install --no-deps -e . && \
+    pip install transformers>=4.51.0 xxhash
+
+# Install development dependencies
+RUN pip install pytest pytest-cov pytest-mock
+
+# Healthcheck to verify HPU availability
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD hl-smi > /dev/null 2>&1 || exit 1
+
+# Default command
+CMD ["bash"]
