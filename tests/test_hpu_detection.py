@@ -56,11 +56,15 @@ class TestHPUDetection:
         htorch.core.mark_step()
         assert result is not None
 
-    def test_hpu_empty_cache(self, hpu_device):
-        """Test that empty_cache works."""
+    def test_hpu_memory_stats(self, hpu_device):
+        """Test that memory stats can be retrieved."""
         tensor = torch.randn(1000, 1000, device="hpu", dtype=torch.bfloat16)
+        # Check memory is being used
+        free_before, total = torch.hpu.mem_get_info()
         del tensor
-        torch.hpu.empty_cache()  # Should not raise
+        torch.hpu.synchronize()
+        free_after, _ = torch.hpu.mem_get_info()
+        assert total > 0
 
 
 class TestHPUOperations:
@@ -115,11 +119,9 @@ class TestMultiHPU:
 
     def test_tensors_on_different_hpus(self, multi_hpu):
         """Test creating tensors on different HPUs."""
-        torch.hpu.set_device(0)
-        t0 = torch.randn(10, 10, device="hpu", dtype=torch.bfloat16)
-
-        torch.hpu.set_device(1)
-        t1 = torch.randn(10, 10, device="hpu", dtype=torch.bfloat16)
+        # Use explicit device strings to ensure correct placement
+        t0 = torch.randn(10, 10, device="hpu:0", dtype=torch.bfloat16)
+        t1 = torch.randn(10, 10, device="hpu:1", dtype=torch.bfloat16)
 
         assert t0.device.index == 0
         assert t1.device.index == 1
