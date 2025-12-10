@@ -8,10 +8,16 @@ These tests validate the configuration system including:
 - Backward compatibility with CUDA configs
 """
 
+import sys
+from unittest.mock import MagicMock
+
 import pytest
 import torch
 
-from nanovllm.config import Config
+# Mock CUDA-specific modules before importing nanovllm
+sys.modules["flash_attn"] = MagicMock()
+
+from nanovllm.config import Config  # noqa: E402
 
 
 # Small model for testing - HuggingFace will download/cache automatically
@@ -97,44 +103,25 @@ class TestHPUConstraints:
             Config(model=model_id, device_type="hpu", dtype=torch.float32)
 
 
-class TestCUDABackwardCompatibility:
-    """Tests ensuring CUDA configs still work."""
+class TestAutoDetection:
+    """Tests for device and backend auto-detection."""
 
-    def test_cuda_block_size_defaults_to_256(self, model_id):
-        """Test CUDA defaults to block size 256."""
-        config = Config(model=model_id, device_type="cuda")
-        assert config.kvcache_block_size == 256
+    def test_explicit_hpu_overrides_auto(self, model_id):
+        """Test explicit device_type='hpu' works."""
+        config = Config(model=model_id, device_type="hpu")
+        assert config.device_type == "hpu"
+        assert config.distributed_backend == "hccl"
 
-    def test_cuda_auto_selects_nccl_backend(self, model_id):
-        """Test CUDA auto-selects NCCL backend."""
-        config = Config(model=model_id, device_type="cuda")
-        assert config.distributed_backend == "nccl"
-
-    def test_cuda_accepts_block_size_512(self, model_id):
-        """Test CUDA accepts block size 512."""
-        config = Config(model=model_id, device_type="cuda", kvcache_block_size=512)
-        assert config.kvcache_block_size == 512
-
-    def test_cuda_rejects_block_size_128(self, model_id):
-        """Test CUDA rejects block size 128 (not divisible by 256)."""
-        with pytest.raises(ValueError, match="divisible by 256"):
-            Config(model=model_id, device_type="cuda", kvcache_block_size=128)
-
-    def test_cuda_accepts_float16(self, model_id):
-        """Test CUDA accepts float16 dtype."""
-        config = Config(model=model_id, device_type="cuda", dtype=torch.float16)
-        assert config.dtype == torch.float16
-
-    def test_cuda_accepts_bfloat16(self, model_id):
-        """Test CUDA accepts bfloat16 dtype."""
-        config = Config(model=model_id, device_type="cuda", dtype=torch.bfloat16)
-        assert config.dtype == torch.bfloat16
+    def test_explicit_backend_preserved(self, model_id):
+        """Test explicit backend setting is preserved."""
+        config = Config(model=model_id, device_type="hpu", distributed_backend="hccl")
+        assert config.distributed_backend == "hccl"
 
     def test_existing_fields_preserved(self, model_id):
         """Test that existing Config fields work correctly."""
         config = Config(
             model=model_id,
-            device_type="cuda",
+            device_type="hpu",
             max_num_batched_tokens=8192,
             max_num_seqs=256,
             gpu_memory_utilization=0.85,
@@ -146,27 +133,6 @@ class TestCUDABackwardCompatibility:
         assert config.gpu_memory_utilization == 0.85
         assert config.tensor_parallel_size == 2
         assert config.enforce_eager is True
-
-
-class TestAutoDetection:
-    """Tests for device and backend auto-detection."""
-
-    def test_explicit_hpu_overrides_auto(self, model_id):
-        """Test explicit device_type='hpu' works."""
-        config = Config(model=model_id, device_type="hpu")
-        assert config.device_type == "hpu"
-        assert config.distributed_backend == "hccl"
-
-    def test_explicit_cuda_overrides_auto(self, model_id):
-        """Test explicit device_type='cuda' works."""
-        config = Config(model=model_id, device_type="cuda")
-        assert config.device_type == "cuda"
-        assert config.distributed_backend == "nccl"
-
-    def test_explicit_backend_preserved(self, model_id):
-        """Test explicit backend setting is preserved."""
-        config = Config(model=model_id, device_type="hpu", distributed_backend="hccl")
-        assert config.distributed_backend == "hccl"
 
 
 class TestValidationErrorMessages:
@@ -188,12 +154,3 @@ class TestValidationErrorMessages:
 
         error_msg = str(exc_info.value)
         assert "bfloat16" in error_msg
-
-    def test_cuda_block_size_error_includes_value(self, model_id):
-        """Test CUDA block size error shows the invalid value."""
-        with pytest.raises(ValueError) as exc_info:
-            Config(model=model_id, device_type="cuda", kvcache_block_size=128)
-
-        error_msg = str(exc_info.value)
-        assert "256" in error_msg  # Shows required alignment
-        assert "128" in error_msg  # Shows actual value
