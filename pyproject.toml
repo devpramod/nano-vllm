@@ -13,10 +13,24 @@ description = "a lightweight vLLM implementation built from scratch"
 requires-python = ">=3.10,<3.13"
 dependencies = [
     "torch>=2.4.0",
-    "triton>=3.0.0",
     "transformers>=4.51.0",
-    "flash-attn",
     "xxhash",
+]
+
+[project.optional-dependencies]
+# CUDA-specific dependencies (for NVIDIA GPUs)
+cuda = [
+    "triton>=3.0.0",
+    "flash-attn",
+]
+
+# Gaudi/HPU - habana-frameworks is pre-installed in Habana containers
+gaudi = []
+
+# Development dependencies
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
 ]
 
 [project.urls]
@@ -25,3 +39,18 @@ Homepage="https://github.com/GeeeekExplorer/nano-vllm"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["nanovllm*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+markers = [
+    "multi_hpu: marks tests as requiring multiple HPUs",
+    "slow: marks tests as slow running",
+]
+addopts = "-v --tb=short"
+
+[project.entry-points."nanovllm.platforms"]
+cuda = "nanovllm.platforms.cuda:CudaPlatform"
+hpu = "nanovllm.platforms.hpu:HpuPlatform"
