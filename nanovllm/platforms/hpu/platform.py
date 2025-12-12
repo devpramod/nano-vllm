@@ -178,3 +178,14 @@ class HpuPlatform(Platform):
             torch._dynamo.config.disable = True
             # Enable lazy collectives for multi-HPU inference
             os.environ["PT_HPU_ENABLE_LAZY_COLLECTIVES"] = "true"
+
+    def get_communicator_cls(self) -> Type:
+        """
+        Get the HPU communicator class.
+
+        Returns:
+            HpuCommunicator class using HCCL backend with mark_step() support.
+        """
+        from nanovllm.distributed import HpuCommunicator
+
+        return HpuCommunicator

@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Tuple, Type
 
 if TYPE_CHECKING:
     from nanovllm.config import Config
+    from nanovllm.distributed import Communicator
 
 
 class Platform(ABC):
@@ -105,3 +106,27 @@ class Platform(ABC):
             Device string (e.g., "cuda", "hpu").
         """
         return self.device_name
+
+    @abstractmethod
+    def get_communicator_cls(self) -> Type["Communicator"]:
+        """
+        Get the communicator class for this platform.
+
+        Returns:
+            The communicator class (e.g., CudaCommunicator, HpuCommunicator).
+        """
+        raise NotImplementedError
+
+    def create_communicator(self, world_size: int, rank: int) -> "Communicator":
+        """
+        Create a communicator instance for this platform.
+
+        Args:
+            world_size: Total number of processes.
+            rank: Rank of current process.
+
+        Returns:
+            Communicator instance for this platform.
+        """
+        comm_cls = self.get_communicator_cls()
+        return comm_cls(world_size, rank)

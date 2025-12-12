@@ -1,7 +1,12 @@
+from typing import TYPE_CHECKING
+
 import torch
 from torch import nn
 import torch.nn.functional as F
 import torch.distributed as dist
+
+if TYPE_CHECKING:
+    from nanovllm.distributed import Communicator
 
 
 def divide(numerator, denominator):
@@ -135,9 +140,11 @@ class RowParallelLinear(LinearBase):
         input_size: int,
         output_size: int,
         bias: bool = False,
+        communicator: "Communicator | None" = None,
     ):
         tp_size = dist.get_world_size()
         super().__init__(divide(input_size, tp_size), output_size, bias, 1)
+        self.communicator = communicator
 
     def weight_loader(self, param: nn.Parameter, loaded_weight: torch.Tensor):
         param_data = param.data
@@ -149,5 +156,10 @@ class RowParallelLinear(LinearBase):
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         y = F.linear(x, self.weight, self.bias if self.tp_rank == 0 else None)
         if self.tp_size > 1:
-            dist.all_reduce(y)
+            if self.communicator is not None:
+                # Use platform-specific communicator (enables HPU mark_step())
+                self.communicator.all_reduce(y)
+            else:
+                # Fallback to direct dist call for backwards compatibility
+                dist.all_reduce(y)
         return y

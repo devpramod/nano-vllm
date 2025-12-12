@@ -88,3 +88,14 @@ class CudaPlatform(Platform):
             True if CUDA GPUs and drivers are available.
         """
         return torch.cuda.is_available()
+
+    def get_communicator_cls(self) -> Type:
+        """
+        Get the CUDA communicator class.
+
+        Returns:
+            CudaCommunicator class using NCCL backend.
+        """
+        from nanovllm.distributed import CudaCommunicator
+
+        return CudaCommunicator
