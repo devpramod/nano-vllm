@@ -108,6 +108,46 @@ class Platform(ABC):
         return self.device_name
 
     @abstractmethod
+    def empty_cache(self) -> None:
+        """
+        Clear device memory cache.
+
+        Frees cached memory that can be reallocated.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def reset_peak_memory_stats(self) -> None:
+        """
+        Reset peak memory statistics tracking.
+
+        After calling this, get_peak_memory() will return the peak
+        since this reset, not since program start.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_peak_memory(self) -> int:
+        """
+        Get peak allocated memory in bytes.
+
+        Returns:
+            Peak memory allocation since last reset, in bytes.
+            On platforms without peak tracking (HPU), returns current usage.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_current_memory(self) -> int:
+        """
+        Get currently allocated memory in bytes.
+
+        Returns:
+            Current memory allocation in bytes.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     def get_communicator_cls(self) -> Type["Communicator"]:
         """
         Get the communicator class for this platform.

@@ -89,6 +89,40 @@ class CudaPlatform(Platform):
         """
         return torch.cuda.is_available()
 
+    def empty_cache(self) -> None:
+        """
+        Clear CUDA memory cache.
+
+        Frees cached memory that can be reallocated.
+        """
+        torch.cuda.empty_cache()
+
+    def reset_peak_memory_stats(self) -> None:
+        """
+        Reset CUDA peak memory statistics.
+
+        After calling this, get_peak_memory() returns peak since reset.
+        """
+        torch.cuda.reset_peak_memory_stats()
+
+    def get_peak_memory(self) -> int:
+        """
+        Get peak allocated CUDA memory in bytes.
+
+        Returns:
+            Peak memory allocation since last reset.
+        """
+        return torch.cuda.memory_stats()["allocated_bytes.all.peak"]
+
+    def get_current_memory(self) -> int:
+        """
+        Get currently allocated CUDA memory in bytes.
+
+        Returns:
+            Current memory allocation.
+        """
+        return torch.cuda.memory_stats()["allocated_bytes.all.current"]
+
     def get_communicator_cls(self) -> Type:
         """
         Get the CUDA communicator class.

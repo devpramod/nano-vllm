@@ -43,6 +43,10 @@ class HpuPlatform(Platform):
     device_name = "hpu"
     device_type = "hpu"
 
+    def __init__(self):
+        """Initialize HPU platform."""
+        super().__init__()
+
     def check_and_update_config(self, config: "Config") -> None:
         """
         Validate and update configuration for HPU platform.
@@ -189,3 +193,65 @@ class HpuPlatform(Platform):
         from nanovllm.distributed import HpuCommunicator
 
         return HpuCommunicator
+
+    # =========================================================================
+    # Memory management methods
+    # =========================================================================
+
+    def empty_cache(self) -> None:
+        """
+        Clear HPU memory cache.
+
+        Follows vllm-gaudi pattern: HPU memory management relies on
+        Python garbage collection rather than torch.hpu.empty_cache().
+        gc.collect() forces immediate collection of unreferenced tensors,
+        allowing HPU runtime to reclaim device memory.
+
+        See: vllm-gaudi/vllm_gaudi/v1/worker/hpu_worker.py
+        """
+        import gc
+
+        gc.collect()
+
+    def reset_peak_memory_stats(self) -> None:
+        """
+        Reset peak memory statistics tracking.
+
+        HPU doesn't have native peak memory tracking like CUDA.
+        This is a no-op; use HpuMemoryProfiler context manager for
+        accurate delta-based memory measurement.
+        """
+        import gc
+
+        gc.collect()
+
+    def get_peak_memory(self) -> int:
+        """
+        Get peak allocated HPU memory in bytes.
+
+        HPU lacks true peak tracking. Returns current memory usage,
+        which after warmup represents a reasonable approximation.
+
+        Note: In lazy mode, call synchronize() first if accurate value needed.
+        See: vllm-gaudi pattern - caller responsible for sync.
+
+        Returns:
+            Current memory usage in bytes.
+        """
+        from nanovllm.platforms.hpu.memory import HpuMemoryProfiler
+
+        return HpuMemoryProfiler.current_device_memory_usage()
+
+    def get_current_memory(self) -> int:
+        """
+        Get currently allocated HPU memory in bytes.
+
+        Note: In lazy mode, call synchronize() first if accurate value needed.
+        See: vllm-gaudi pattern - caller responsible for sync.
+
+        Returns:
+            Current memory allocation in bytes.
+        """
+        from nanovllm.platforms.hpu.memory import HpuMemoryProfiler
+
+        return HpuMemoryProfiler.current_device_memory_usage()
