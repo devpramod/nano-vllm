@@ -170,3 +170,26 @@ class Platform(ABC):
         """
         comm_cls = self.get_communicator_cls()
         return comm_cls(world_size, rank)
+
+    @abstractmethod
+    def get_distributed_backend(self) -> str:
+        """
+        Get the distributed communication backend name.
+
+        Returns:
+            Backend string for torch.distributed (e.g., 'nccl', 'hccl').
+        """
+        raise NotImplementedError
+
+    @property
+    def supports_cuda_graphs(self) -> bool:
+        """
+        Whether this platform supports CUDA graph capture.
+
+        CUDA graphs provide optimized kernel launch for repeated operations.
+        HPU uses lazy mode instead and does not support CUDA graphs.
+
+        Returns:
+            True if CUDA graphs are supported, False otherwise.
+        """
+        return False

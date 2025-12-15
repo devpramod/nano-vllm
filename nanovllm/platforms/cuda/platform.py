@@ -133,3 +133,22 @@ class CudaPlatform(Platform):
         from nanovllm.distributed import CudaCommunicator
 
         return CudaCommunicator
+
+    def get_distributed_backend(self) -> str:
+        """
+        Get the NCCL backend for CUDA distributed communication.
+
+        Returns:
+            'nccl' - NVIDIA Collective Communications Library.
+        """
+        return "nccl"
+
+    @property
+    def supports_cuda_graphs(self) -> bool:
+        """
+        CUDA supports graph capture for optimized kernel launch.
+
+        Returns:
+            True - CUDA graphs are fully supported.
+        """
+        return True

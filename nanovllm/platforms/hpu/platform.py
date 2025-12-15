@@ -194,6 +194,15 @@ class HpuPlatform(Platform):
 
         return HpuCommunicator
 
+    def get_distributed_backend(self) -> str:
+        """
+        Get the HCCL backend for HPU distributed communication.
+
+        Returns:
+            'hccl' - Habana Collective Communications Library.
+        """
+        return "hccl"
+
     # =========================================================================
     # Memory management methods
     # =========================================================================

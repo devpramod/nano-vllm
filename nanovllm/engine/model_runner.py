@@ -23,20 +23,30 @@ class ModelRunner:
         self.world_size = config.tensor_parallel_size
         self.rank = rank
         self.event = event
-        # Get platform for device-agnostic memory operations
+        # Get platform for device-agnostic operations
         self.platform = get_platform(config.device_type)
+        self.device = self.platform.device_name
+        # HPU doesn't benefit from pinned memory (unified memory architecture)
+        self.pin_memory = self.device == "cuda"
 
-        dist.init_process_group("nccl", "tcp://localhost:2333", world_size=self.world_size, rank=rank)
-        torch.cuda.set_device(rank)
+        # Initialize distributed with platform-specific backend (nccl/hccl)
+        dist.init_process_group(
+            self.platform.get_distributed_backend(),
+            "tcp://localhost:2333",
+            world_size=self.world_size,
+            rank=rank,
+        )
+        self.platform.set_device(rank)
         default_dtype = torch.get_default_dtype()
         torch.set_default_dtype(hf_config.torch_dtype)
-        torch.set_default_device("cuda")
+        torch.set_default_device(self.device)
         self.model = Qwen3ForCausalLM(hf_config)
         load_model(self.model, config.model)
         self.sampler = Sampler()
         self.warmup_model()
         self.allocate_kv_cache()
-        if not self.enforce_eager:
+        # Only capture CUDA graphs if platform supports them (HPU uses lazy mode)
+        if not self.enforce_eager and self.platform.supports_cuda_graphs:
             self.capture_cudagraph()
         torch.set_default_device("cpu")
         torch.set_default_dtype(default_dtype)
@@ -56,9 +66,10 @@ class ModelRunner:
             dist.barrier()
             if self.rank == 0:
                 self.shm.unlink()
-        if not self.enforce_eager:
+        # Only delete graphs if they were captured (CUDA only, not HPU)
+        if not self.enforce_eager and self.platform.supports_cuda_graphs:
             del self.graphs, self.graph_pool
-        torch.cuda.synchronize()
+        self.platform.synchronize()
         dist.destroy_process_group()
 
     def loop(self):
@@ -126,7 +137,9 @@ class ModelRunner:
     def prepare_block_tables(self, seqs: list[Sequence]):
         max_len = max(len(seq.block_table) for seq in seqs)
         block_tables = [seq.block_table + [-1] * (max_len - len(seq.block_table)) for seq in seqs]
-        block_tables = torch.tensor(block_tables, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
+        block_tables = torch.tensor(
+            block_tables, dtype=torch.int32, pin_memory=self.pin_memory
+        ).to(self.device, non_blocking=True)
         return block_tables
 
     def prepare_prefill(self, seqs: list[Sequence]):
@@ -159,11 +172,21 @@ class ModelRunner:
                 slot_mapping.extend(list(range(start, end)))
         if cu_seqlens_k[-1] > cu_seqlens_q[-1]:    # prefix cache
             block_tables = self.prepare_block_tables(seqs)
-        input_ids = torch.tensor(input_ids, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
-        positions = torch.tensor(positions, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
-        cu_seqlens_q = torch.tensor(cu_seqlens_q, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
-        cu_seqlens_k = torch.tensor(cu_seqlens_k, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
-        slot_mapping = torch.tensor(slot_mapping, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
+        input_ids = torch.tensor(
+            input_ids, dtype=torch.int64, pin_memory=self.pin_memory
+        ).to(self.device, non_blocking=True)
+        positions = torch.tensor(
+            positions, dtype=torch.int64, pin_memory=self.pin_memory
+        ).to(self.device, non_blocking=True)
+        cu_seqlens_q = torch.tensor(
+            cu_seqlens_q, dtype=torch.int32, pin_memory=self.pin_memory
+        ).to(self.device, non_blocking=True)
+        cu_seqlens_k = torch.tensor(
+            cu_seqlens_k, dtype=torch.int32, pin_memory=self.pin_memory
+        ).to(self.device, non_blocking=True)
+        slot_mapping = torch.tensor(
+            slot_mapping, dtype=torch.int32, pin_memory=self.pin_memory
+        ).to(self.device, non_blocking=True)
         set_context(True, cu_seqlens_q, cu_seqlens_k, max_seqlen_q, max_seqlen_k, slot_mapping, None, block_tables)
         return input_ids, positions
 
@@ -177,10 +200,18 @@ class ModelRunner:
             positions.append(len(seq) - 1)
             context_lens.append(len(seq))
             slot_mapping.append(seq.block_table[-1] * self.block_size + seq.last_block_num_tokens  - 1)
-        input_ids = torch.tensor(input_ids, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
-        positions = torch.tensor(positions, dtype=torch.int64, pin_memory=True).cuda(non_blocking=True)
-        slot_mapping = torch.tensor(slot_mapping, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
-        context_lens = torch.tensor(context_lens, dtype=torch.int32, pin_memory=True).cuda(non_blocking=True)
+        input_ids = torch.tensor(
+            input_ids, dtype=torch.int64, pin_memory=self.pin_memory
+        ).to(self.device, non_blocking=True)
+        positions = torch.tensor(
+            positions, dtype=torch.int64, pin_memory=self.pin_memory
+        ).to(self.device, non_blocking=True)
+        slot_mapping = torch.tensor(
+            slot_mapping, dtype=torch.int32, pin_memory=self.pin_memory
+        ).to(self.device, non_blocking=True)
+        context_lens = torch.tensor(
+            context_lens, dtype=torch.int32, pin_memory=self.pin_memory
+        ).to(self.device, non_blocking=True)
         block_tables = self.prepare_block_tables(seqs)
         set_context(False, slot_mapping=slot_mapping, context_lens=context_lens, block_tables=block_tables)
         return input_ids, positions
@@ -189,12 +220,21 @@ class ModelRunner:
         temperatures = []
         for seq in seqs:
             temperatures.append(seq.temperature)
-        temperatures = torch.tensor(temperatures, dtype=torch.float32, pin_memory=True).cuda(non_blocking=True)
+        temperatures = torch.tensor(
+            temperatures, dtype=torch.float32, pin_memory=self.pin_memory
+        ).to(self.device, non_blocking=True)
         return temperatures
 
     @torch.inference_mode()
     def run_model(self, input_ids: torch.Tensor, positions: torch.Tensor, is_prefill: bool):
-        if is_prefill or self.enforce_eager or input_ids.size(0) > 512:
+        # Use eager execution for: prefill, enforce_eager, large batch, or HPU (uses lazy mode)
+        use_eager = (
+            is_prefill
+            or self.enforce_eager
+            or input_ids.size(0) > 512
+            or not self.platform.supports_cuda_graphs
+        )
+        if use_eager:
             return self.model.compute_logits(self.model(input_ids, positions))
         else:
             bs = input_ids.size(0)
@@ -214,7 +254,17 @@ class ModelRunner:
     def run(self, seqs: list[Sequence], is_prefill: bool) -> list[int]:
         input_ids, positions = self.prepare_prefill(seqs) if is_prefill else self.prepare_decode(seqs)
         temperatures = self.prepare_sample(seqs) if self.rank == 0 else None
+
+        # HPU lazy mode: mark_step() before model execution to flush tensor transfers
+        if hasattr(self.platform, "mark_step"):
+            self.platform.mark_step()
+
         logits = self.run_model(input_ids, positions, is_prefill)
+
+        # HPU lazy mode: mark_step() before sampling to ensure logits are computed
+        if hasattr(self.platform, "mark_step"):
+            self.platform.mark_step()
+
         token_ids = self.sampler(logits, temperatures).tolist() if self.rank == 0 else None
         reset_context()
         return token_ids
