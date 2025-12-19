@@ -204,6 +204,62 @@ class HpuPlatform(Platform):
         return "hccl"
 
     # =========================================================================
+    # HPU Graph support
+    # =========================================================================
+
+    def is_lazy_mode(self) -> bool:
+        """
+        Check if running in HPU lazy mode.
+
+        Lazy mode accumulates operations into a graph before execution.
+        HPU Graphs only work in lazy mode.
+
+        Returns:
+            True if lazy mode is active, False if eager mode.
+        """
+        if htorch is None:
+            return False
+        try:
+            return htorch.utils.internal.is_lazy()
+        except AttributeError:
+            # Older Habana versions may not have is_lazy()
+            return True  # Default assumption
+
+    def wrap_model_for_inference(self, model: torch.nn.Module) -> torch.nn.Module:
+        """
+        Wrap model in HPU Graph for optimized lazy mode execution.
+
+        HPU Graphs record the execution graph on first forward pass and
+        replay it on subsequent calls, reducing host overhead significantly.
+
+        Only wraps if:
+        - Habana frameworks available
+        - Running in lazy mode (not eager)
+
+        Uses disable_tensor_cache=True to prevent unbounded memory growth
+        with varying batch/sequence sizes during LLM inference.
+
+        Args:
+            model: The model to wrap.
+
+        Returns:
+            HPU Graph wrapped model, or original if lazy mode not active.
+        """
+        if htorch is None:
+            return model
+
+        # Only wrap in lazy mode - eager mode doesn't benefit from HPU graphs
+        if not self.is_lazy_mode():
+            return model
+
+        # Synchronize before wrapping to ensure clean state
+        torch.hpu.synchronize()
+
+        # Wrap model in HPU graph with tensor cache disabled
+        # disable_tensor_cache=True prevents OOM with variable batch/seq sizes
+        return htorch.hpu.wrap_in_hpu_graph(model, disable_tensor_cache=True)
+
+    # =========================================================================
     # Memory management methods
     # =========================================================================
 

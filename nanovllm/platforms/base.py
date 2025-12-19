@@ -181,6 +181,21 @@ class Platform(ABC):
         """
         raise NotImplementedError
 
+    def wrap_model_for_inference(self, model: "torch.nn.Module") -> "torch.nn.Module":
+        """
+        Wrap model for optimized inference on this platform.
+
+        For HPU: wraps in HPU Graph for lazy mode execution.
+        For CUDA: returns model unchanged (CUDA graphs handled separately).
+
+        Args:
+            model: The model to wrap.
+
+        Returns:
+            Wrapped model ready for inference.
+        """
+        return model  # Default: no wrapping
+
     @property
     def supports_cuda_graphs(self) -> bool:
         """

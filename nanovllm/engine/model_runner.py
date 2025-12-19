@@ -1,3 +1,4 @@
+import logging
 import pickle
 import torch
 import torch.distributed as dist
@@ -11,6 +12,8 @@ from nanovllm.layers.sampler import Sampler
 from nanovllm.platforms import get_platform
 from nanovllm.utils.context import set_context, get_context, reset_context
 from nanovllm.utils.loader import load_model
+
+logger = logging.getLogger(__name__)
 
 
 class ModelRunner:
@@ -43,11 +46,24 @@ class ModelRunner:
         self.model = Qwen3ForCausalLM(hf_config)
         load_model(self.model, config.model)
         self.sampler = Sampler()
+        self.bucketing = None  # Initialized later for HPU
+
+        # Initial warmup for memory measurement (before HPU graph wrapping)
         self.warmup_model()
         self.allocate_kv_cache()
-        # Only capture CUDA graphs if platform supports them (HPU uses lazy mode)
-        if not self.enforce_eager and self.platform.supports_cuda_graphs:
-            self.capture_cudagraph()
+
+        # Platform-specific inference optimization
+        if not self.enforce_eager:
+            # HPU: Initialize bucketing, wrap model, then warmup all bucket shapes
+            if self.device == "hpu":
+                self._init_hpu_bucketing()
+                self.model = self.platform.wrap_model_for_inference(self.model)
+                self.warmup_buckets()
+            # CUDA: Wrap (no-op) then capture explicit CUDA graphs per batch size
+            elif self.platform.supports_cuda_graphs:
+                self.model = self.platform.wrap_model_for_inference(self.model)
+                self.capture_cudagraph()
+
         torch.set_default_device("cpu")
         torch.set_default_dtype(default_dtype)
 
@@ -133,6 +149,66 @@ class ModelRunner:
                 module.k_cache = self.kv_cache[0, layer_id]
                 module.v_cache = self.kv_cache[1, layer_id]
                 layer_id += 1
+
+    def _init_hpu_bucketing(self):
+        """Initialize HPU bucketing manager after KV cache allocation."""
+        from nanovllm.platforms.hpu.bucketing import LinearBucketing
+
+        self.bucketing = LinearBucketing(self.config)
+        self.bucketing.initialize(self.config.num_kvcache_blocks)
+        logger.info(f"HPU bucketing initialized with {self.bucketing.total_buckets} total buckets")
+
+    @torch.inference_mode()
+    def warmup_buckets(self):
+        """
+        Warmup all bucket shapes to pre-compile HPU graphs.
+
+        Each forward pass with a unique shape compiles a new HPU graph.
+        By warming up all bucket shapes, we avoid runtime compilation.
+        """
+        if self.bucketing is None:
+            logger.warning("Bucketing not initialized, skipping bucket warmup")
+            return
+
+        logger.info(f"Starting HPU bucket warmup: {self.bucketing.total_buckets} buckets")
+        self.platform.empty_cache()
+
+        # Warmup prefill buckets
+        prefill_buckets = self.bucketing.get_prefill_buckets()
+        for i, (bs, seq_len) in enumerate(prefill_buckets):
+            logger.debug(f"Warmup prefill bucket {i+1}/{len(prefill_buckets)}: bs={bs}, seq_len={seq_len}")
+
+            # Create dummy inputs matching bucket shape
+            input_ids = torch.zeros(bs * seq_len, dtype=torch.int64, device=self.device)
+            positions = torch.zeros(bs * seq_len, dtype=torch.int64, device=self.device)
+
+            # Run forward pass to compile HPU graph for this shape
+            self.model(input_ids, positions)
+
+            # Critical: mark_step() flushes the compiled graph
+            if hasattr(self.platform, "mark_step"):
+                self.platform.mark_step()
+            self.platform.synchronize()
+
+        # Warmup decode buckets
+        decode_buckets = self.bucketing.get_decode_buckets()
+        for i, (bs, num_blocks) in enumerate(decode_buckets):
+            logger.debug(f"Warmup decode bucket {i+1}/{len(decode_buckets)}: bs={bs}, num_blocks={num_blocks}")
+
+            # Decode: input is always 1 token per sequence
+            input_ids = torch.zeros(bs, dtype=torch.int64, device=self.device)
+            positions = torch.zeros(bs, dtype=torch.int64, device=self.device)
+
+            # Run forward pass
+            self.model(input_ids, positions)
+
+            # Flush compiled graph
+            if hasattr(self.platform, "mark_step"):
+                self.platform.mark_step()
+            self.platform.synchronize()
+
+        self.platform.empty_cache()
+        logger.info("HPU bucket warmup complete")
 
     def prepare_block_tables(self, seqs: list[Sequence]):
         max_len = max(len(seq.block_table) for seq in seqs)
