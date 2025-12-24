@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING, Tuple, Type
 if TYPE_CHECKING:
     from nanovllm.config import Config
     from nanovllm.distributed import Communicator
+    from nanovllm.layers.attention_backends.base import AttentionBackend
+    from nanovllm.layers.kv_cache.base import KVCacheOps
 
 
 class Platform(ABC):
@@ -49,13 +51,24 @@ class Platform(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def get_attention_backend(self) -> Type:
+    def get_attention_backend(self) -> "AttentionBackend":
         """
-        Get the attention backend class for this platform.
+        Get an attention backend instance for this platform.
 
         Returns:
-            The attention backend class (e.g., FlashAttention for CUDA,
-            FusedSDPA for HPU).
+            AttentionBackend instance (e.g., CudaAttentionBackend for CUDA,
+            HpuAttentionBackend for HPU).
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    def get_kv_cache_ops(self) -> "KVCacheOps":
+        """
+        Get a KV cache operations instance for this platform.
+
+        Returns:
+            KVCacheOps instance (e.g., CudaKVCacheOps for CUDA,
+            HpuKVCacheOps for HPU).
         """
         raise NotImplementedError
 

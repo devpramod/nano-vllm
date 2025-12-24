@@ -10,6 +10,15 @@ from nanovllm.platforms.hpu.bucketing import (
     LinearBucketing,
     warmup_range,
 )
+from nanovllm.platforms.hpu.attention import (
+    HpuAttentionMetadata,
+    HpuAttentionBackend,
+    ModuleFusedSDPA,
+    batch2block,
+    block2batch,
+    grouped_max,
+    pipelined_pa,
+)
 
 __all__ = [
     "HpuPlatform",
@@ -18,4 +27,12 @@ __all__ = [
     "format_bytes",
     "LinearBucketing",
     "warmup_range",
+    # Attention
+    "HpuAttentionMetadata",
+    "HpuAttentionBackend",
+    "ModuleFusedSDPA",
+    "batch2block",
+    "block2batch",
+    "grouped_max",
+    "pipelined_pa",
 ]

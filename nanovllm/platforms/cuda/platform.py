@@ -43,16 +43,27 @@ class CudaPlatform(Platform):
                 f"got {config.kvcache_block_size}"
             )
 
-    def get_attention_backend(self) -> Type:
+    def get_attention_backend(self):
         """
         Get the Flash Attention backend for CUDA.
 
         Returns:
-            The Attention class from nanovllm.layers.attention.
+            CudaAttentionBackend instance using flash_attn.
         """
-        from nanovllm.layers.attention import Attention
+        from nanovllm.layers.attention_backends.cuda import CudaAttentionBackend
 
-        return Attention
+        return CudaAttentionBackend()
+
+    def get_kv_cache_ops(self):
+        """
+        Get the Triton-based KV cache ops for CUDA.
+
+        Returns:
+            CudaKVCacheOps instance using Triton kernel.
+        """
+        from nanovllm.layers.kv_cache.cuda import CudaKVCacheOps
+
+        return CudaKVCacheOps()
 
     def set_device(self, rank: int) -> None:
         """

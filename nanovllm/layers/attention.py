@@ -1,53 +1,46 @@
+"""
+Attention layer with platform-agnostic backend support.
+
+This module provides the Attention class that delegates to platform-specific
+backends (CudaAttentionBackend, HpuAttentionBackend) for optimized execution.
+"""
 import torch
 from torch import nn
-import triton
-import triton.language as tl
 
-from flash_attn import flash_attn_varlen_func, flash_attn_with_kvcache
 from nanovllm.utils.context import get_context
-
-
-@triton.jit
-def store_kvcache_kernel(
-    key_ptr,
-    key_stride,
-    value_ptr,
-    value_stride,
-    k_cache_ptr,
-    v_cache_ptr,
-    slot_mapping_ptr,
-    D: tl.constexpr,
-):
-    idx = tl.program_id(0)
-    slot = tl.load(slot_mapping_ptr + idx)
-    if slot == -1: return
-    key_offsets = idx * key_stride + tl.arange(0, D)
-    value_offsets = idx * value_stride + tl.arange(0, D)
-    key = tl.load(key_ptr + key_offsets)
-    value = tl.load(value_ptr + value_offsets)
-    cache_offsets = slot * D + tl.arange(0, D)
-    tl.store(k_cache_ptr + cache_offsets, key)
-    tl.store(v_cache_ptr + cache_offsets, value)
-
-
-def store_kvcache(key: torch.Tensor, value: torch.Tensor, k_cache: torch.Tensor, v_cache: torch.Tensor, slot_mapping: torch.Tensor):
-    N, num_heads, head_dim = key.shape
-    D = num_heads * head_dim
-    assert key.stride(-1) == 1 and value.stride(-1) == 1
-    assert key.stride(1) == head_dim and value.stride(1) == head_dim
-    assert k_cache.stride(1) == D and v_cache.stride(1) == D
-    assert slot_mapping.numel() == N
-    store_kvcache_kernel[(N,)](key, key.stride(0), value, value.stride(0), k_cache, v_cache, slot_mapping, D)
+from nanovllm.layers.attention_backends.base import AttentionBackend
+from nanovllm.layers.kv_cache.base import KVCacheOps
 
 
 class Attention(nn.Module):
+    """
+    Platform-agnostic attention layer.
+
+    Uses platform-specific backends for attention computation and KV cache
+    operations. By default, auto-detects the platform and selects the
+    appropriate backend.
+
+    Args:
+        num_heads: Number of attention heads
+        head_dim: Dimension per head
+        scale: Softmax scale factor (typically 1/sqrt(head_dim))
+        num_kv_heads: Number of key/value heads (for GQA)
+        backend: Optional attention backend. If None, auto-detects.
+        kv_ops: Optional KV cache ops. If None, auto-detects.
+
+    Example:
+        attn = Attention(num_heads=32, head_dim=128, scale=0.088, num_kv_heads=8)
+        output = attn(q, k, v)
+    """
 
     def __init__(
         self,
-        num_heads,
-        head_dim,
-        scale,
-        num_kv_heads,
+        num_heads: int,
+        head_dim: int,
+        scale: float,
+        num_kv_heads: int,
+        backend: AttentionBackend = None,
+        kv_ops: KVCacheOps = None,
     ):
         super().__init__()
         self.num_heads = num_heads
@@ -56,20 +49,49 @@ class Attention(nn.Module):
         self.num_kv_heads = num_kv_heads
         self.k_cache = self.v_cache = torch.tensor([])
 
-    def forward(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor):
+        # Auto-detect platform if backend/kv_ops not provided
+        if backend is None or kv_ops is None:
+            from nanovllm.platforms import get_platform
+            platform = get_platform()
+            self.backend = backend if backend else platform.get_attention_backend()
+            self.kv_ops = kv_ops if kv_ops else platform.get_kv_cache_ops()
+        else:
+            self.backend = backend
+            self.kv_ops = kv_ops
+
+    def forward(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
+        """
+        Compute attention with KV cache support.
+
+        Uses the global Context (from get_context()) for metadata like
+        cu_seqlens, slot_mapping, etc. This preserves backward compatibility
+        with existing code that sets context via set_context().
+
+        Args:
+            q: Query tensor [num_tokens, num_heads, head_dim]
+            k: Key tensor [num_tokens, num_kv_heads, head_dim]
+            v: Value tensor [num_tokens, num_kv_heads, head_dim]
+
+        Returns:
+            Attention output [num_tokens, num_heads, head_dim]
+        """
         context = get_context()
         k_cache, v_cache = self.k_cache, self.v_cache
+
+        # Store K/V to cache if cache is allocated
         if k_cache.numel() and v_cache.numel():
-            store_kvcache(k, v, k_cache, v_cache, context.slot_mapping)
-        if context.is_prefill:
-            if context.block_tables is not None:    # prefix cache
-                k, v = k_cache, v_cache
-            o = flash_attn_varlen_func(q, k, v,
-                                       max_seqlen_q=context.max_seqlen_q, cu_seqlens_q=context.cu_seqlens_q,
-                                       max_seqlen_k=context.max_seqlen_k, cu_seqlens_k=context.cu_seqlens_k,
-                                       softmax_scale=self.scale, causal=True, block_table=context.block_tables)
-        else:    # decode
-            o = flash_attn_with_kvcache(q.unsqueeze(1), k_cache, v_cache,
-                                        cache_seqlens=context.context_lens, block_table=context.block_tables, 
-                                        softmax_scale=self.scale, causal=True)
-        return o
+            self.kv_ops.store(k, v, k_cache, v_cache, context.slot_mapping)
+
+        # Build platform-specific metadata from global context
+        # Each backend creates its own metadata type with the fields it needs
+        metadata = self.backend.create_metadata(context)
+
+        # Delegate to backend
+        output = self.backend.forward(
+            q, k, v,
+            k_cache, v_cache,
+            metadata,
+            self.scale,
+        )
+
+        return output

@@ -75,20 +75,32 @@ class HpuPlatform(Platform):
                 f"got {config.kvcache_block_size}"
             )
 
-    def get_attention_backend(self) -> Type:
+    def get_attention_backend(self):
         """
-        Get the attention backend class for HPU.
+        Get the attention backend for HPU.
 
         Returns:
-            The HPU attention backend class using FusedSDPA.
+            HpuAttentionBackend instance using FusedSDPA for prefill
+            and flat_pa for decode.
+        """
+        from nanovllm.platforms.hpu.attention import HpuAttentionBackend
+
+        return HpuAttentionBackend()
+
+    def get_kv_cache_ops(self):
+        """
+        Get the KV cache operations for HPU.
+
+        Returns:
+            HpuKVCacheOps instance using index_copy_.
 
         Raises:
-            NotImplementedError: HPU attention backend not yet implemented.
+            NotImplementedError: HPU KV cache ops not yet implemented.
         """
-        # TODO: Implement in Task 11 (HPU Attention Implementation)
+        # TODO: Implement in Task 12 (KV Cache Operations for HPU)
         raise NotImplementedError(
-            "HPU attention backend not yet implemented. "
-            "See Task 11: HPU Attention Implementation."
+            "HPU KV cache ops not yet implemented. "
+            "See Task 12: KV Cache Operations for HPU."
         )
 
     def set_device(self, rank: int) -> None:
